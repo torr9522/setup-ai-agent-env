@@ -336,6 +336,23 @@ check_cmd zstd zstd
 check_cmd rar rar unrar
 check_cmd bat bat
 
+log "激活环境变量"
+if [ -f /etc/profile.d/ai-agent-env.sh ]; then
+  # shellcheck disable=SC1091
+  source /etc/profile.d/ai-agent-env.sh
+  echo "[OK] Environment loaded"
+
+  if command -v go >/dev/null 2>&1; then go version >/dev/null && echo "[OK] go version"; fi
+  if command -v node >/dev/null 2>&1; then node -v >/dev/null && echo "[OK] node -v"; fi
+  if command -v npm >/dev/null 2>&1; then npm -v >/dev/null && echo "[OK] npm -v"; fi
+  if command -v pnpm >/dev/null 2>&1; then pnpm -v >/dev/null && echo "[OK] pnpm -v"; fi
+  if command -v uv >/dev/null 2>&1; then uv --version >/dev/null && echo "[OK] uv --version"; fi
+else
+  echo "[WARN] ai-agent-env.sh not found"
+fi
+
 echo
-echo "完成。建议重新登录 SSH，或执行："
-echo "source /etc/profile.d/ai-agent-env.sh"
+echo "完成。"
+echo "环境变量已自动加载。"
+echo "新 SSH 会话会自动继承环境变量。"
+echo "无需重启服务器。"
