@@ -1,3 +1,31 @@
+# 推荐安装方式
+
+## curl
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/torr9522/setup-ai-agent-env/main/bootstrap.sh)
+```
+
+## wget
+
+```bash
+bash <(wget -qO- https://raw.githubusercontent.com/torr9522/setup-ai-agent-env/main/bootstrap.sh)
+```
+
+如果系统没有 curl：
+
+```bash
+apt update
+apt install -y curl
+```
+
+如果系统没有 wget：
+
+```bash
+apt update
+apt install -y wget
+```
+
 # AI Agent Server Bootstrap Script
 
 Debian / Ubuntu 通用的 AI Agent 服务器初始化脚本。
