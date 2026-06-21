@@ -1,0 +1,7 @@
+*.log
+*.tmp
+.DS_Store
+.env
+id_rsa
+id_ed25519
+setup-ai-agent-env.log
