@@ -2,6 +2,10 @@
 set -Eeuo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
+APT_LOCK_TIMEOUT="${APT_LOCK_TIMEOUT:-300}"
+WARNINGS=()
+MISSING_TOOLS=()
+MISS_COUNT=0
 
 if [[ "$EUID" -ne 0 ]]; then
   echo "请用 root 运行：sudo bash $0"
@@ -17,6 +21,11 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+warn() {
+  echo "[WARN] $*"
+  WARNINGS+=("$*")
+}
+
 retry() {
   local n=0
   until "$@"; do
@@ -28,14 +37,42 @@ retry() {
   done
 }
 
+wait_apt_locks() {
+  local waited=0
+  local interval=3
+  local found
+
+  while true; do
+    found="$(pgrep -x apt apt-get dpkg unattended-upgr 2>/dev/null || true)"
+    if [[ -z "$found" ]]; then
+      return 0
+    fi
+    if [[ "$waited" -eq 0 ]]; then
+      log "等待 apt/dpkg 锁释放"
+    fi
+    if [[ "$waited" -ge "$APT_LOCK_TIMEOUT" ]]; then
+      echo "apt/dpkg 仍被其它进程占用，等待超时：${APT_LOCK_TIMEOUT}s"
+      return 1
+    fi
+    sleep "$interval"
+    waited=$((waited + interval))
+  done
+}
+
+apt_get() {
+  wait_apt_locks
+  apt-get -o DPkg::Lock::Timeout="$APT_LOCK_TIMEOUT" "$@"
+}
+
 install_apt() {
-  apt-get install -y --no-install-recommends "$@"
+  apt_get install -y --no-install-recommends "$@"
 }
 
 repair_dpkg_state() {
   log "检查 dpkg/apt 状态"
+  wait_apt_locks
   dpkg --configure -a
-  apt-get install -f -y
+  apt_get install -f -y
 }
 
 download() {
@@ -57,6 +94,17 @@ github_latest_asset_url() {
     | sed -E 's/.*"([^"]+)".*/\1/' \
     | grep -E "$pattern" \
     | head -n 1
+}
+
+find_chromium_bin() {
+  local candidate
+  for candidate in chromium chromium-browser google-chrome chrome; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      command -v "$candidate"
+      return 0
+    fi
+  done
+  find /root/.cache/ms-playwright -path '*/chrome-linux*/chrome' -type f 2>/dev/null | sort -V | tail -n 1
 }
 
 cleanup_policy_rcd=0
@@ -116,7 +164,7 @@ export PATH="/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 repair_dpkg_state
 
 log "安装基础 apt 工具"
-apt-get update -y
+apt_get update -y
 install_apt \
   apt-transport-https ca-certificates curl wget aria2 gnupg lsb-release sudo \
   software-properties-common coreutils findutils procps
@@ -143,20 +191,20 @@ cat > /etc/apt/sources.list.d/nodesource.list <<EOF
 deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${node_major}.x nodistro main
 EOF
 
-if ! apt-get update -y; then
+if ! apt_get update -y; then
   if [[ "$node_major" != "24" ]]; then
     node_major=24
     cat > /etc/apt/sources.list.d/nodesource.list <<EOF
 deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${node_major}.x nodistro main
 EOF
-    apt-get update -y
+    apt_get update -y
   else
     exit 1
   fi
 fi
 
 log "安装系统工具与官方 apt 工具"
-apt_packages=(
+common_apt_packages=(
   sudo curl wget aria2 ca-certificates gnupg
   git git-lfs gh build-essential make gcc g++ pkg-config
   python3 python3-pip python3-venv python-is-python3
@@ -169,8 +217,16 @@ apt_packages=(
   zip unzip gzip bzip2 xz-utils zstd p7zip-full unrar-free tar file
   bat
 )
+debian_apt_packages=()
+ubuntu_apt_packages=()
 if [[ "$os_id" == "debian" ]]; then
-  apt_packages+=(chromium)
+  debian_apt_packages+=(chromium)
+fi
+apt_packages=("${common_apt_packages[@]}")
+if [[ "$os_id" == "debian" ]]; then
+  apt_packages+=("${debian_apt_packages[@]}")
+elif [[ "$os_id" == "ubuntu" ]]; then
+  apt_packages+=("${ubuntu_apt_packages[@]}")
 fi
 install_apt "${apt_packages[@]}"
 
@@ -206,24 +262,31 @@ if [[ -n "$go_version" ]]; then
 fi
 
 log "安装最新版 yq"
-download "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${yq_arch}" /usr/local/bin/yq
-chmod 755 /usr/local/bin/yq
+if download "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${yq_arch}" /usr/local/bin/yq; then
+  chmod 755 /usr/local/bin/yq
+else
+  warn "yq download failed"
+fi
 
 log "安装最新版 btop"
 if ! need_cmd btop; then
   tmp_dir="$(mktemp -d)"
-  download "https://github.com/aristocratos/btop/releases/latest/download/btop-${btop_arch}-unknown-linux-musl.tar.gz" "$tmp_dir/btop.tar.gz"
-  tar -xzf "$tmp_dir/btop.tar.gz" -C "$tmp_dir"
-  install -m 755 "$tmp_dir/btop/bin/btop" /usr/local/bin/btop
+  if download "https://github.com/aristocratos/btop/releases/latest/download/btop-${btop_arch}-unknown-linux-musl.tar.gz" "$tmp_dir/btop.tar.gz" \
+    && tar -xzf "$tmp_dir/btop.tar.gz" -C "$tmp_dir" \
+    && install -m 755 "$tmp_dir/btop/bin/btop" /usr/local/bin/btop; then
+    :
+  else
+    warn "btop install failed"
+  fi
   rm -rf "$tmp_dir"
 fi
 
 log "安装最新版 Playwright 与浏览器依赖"
-npm install -g playwright@latest || true
-npx -y playwright install-deps chromium || true
-npx -y playwright install chromium || true
+npm install -g playwright@latest || warn "playwright npm install failed"
+npx -y playwright install-deps chromium || warn "playwright chromium dependencies install failed"
+npx -y playwright install chromium || warn "playwright chromium download failed"
 if ! need_cmd chromium && ! need_cmd chromium-browser; then
-  playwright_chromium="$(find /root/.cache/ms-playwright -path '*/chrome-linux*/chrome' -type f 2>/dev/null | sort -V | tail -n 1 || true)"
+  playwright_chromium="$(find_chromium_bin || true)"
   if [[ -n "$playwright_chromium" ]]; then
     ln -sf "$playwright_chromium" /usr/local/bin/chromium
     ln -sf "$playwright_chromium" /usr/local/bin/chromium-browser
@@ -244,6 +307,12 @@ if need_cmd chromium; then
   ln -sf "$(command -v chromium)" /usr/local/bin/chromium-browser || true
 elif need_cmd chromium-browser; then
   ln -sf "$(command -v chromium-browser)" /usr/local/bin/chromium || true
+else
+  chromium_bin="$(find_chromium_bin || true)"
+  if [[ -n "$chromium_bin" ]]; then
+    ln -sf "$chromium_bin" /usr/local/bin/chromium
+    ln -sf "$chromium_bin" /usr/local/bin/chromium-browser
+  fi
 fi
 
 log "写入环境变量"
@@ -275,6 +344,12 @@ if command -v chromium >/dev/null 2>&1; then
 elif command -v chromium-browser >/dev/null 2>&1; then
   export CHROME_BIN="$(command -v chromium-browser)"
   export CHROMIUM_BIN="$(command -v chromium-browser)"
+else
+  PLAYWRIGHT_CHROMIUM="$(find "$HOME/.cache/ms-playwright" -path '*/chrome-linux*/chrome' -type f 2>/dev/null | sort -V | tail -n 1)"
+  if [ -n "$PLAYWRIGHT_CHROMIUM" ]; then
+    export CHROME_BIN="$PLAYWRIGHT_CHROMIUM"
+    export CHROMIUM_BIN="$PLAYWRIGHT_CHROMIUM"
+  fi
 fi
 
 export TERM="${TERM:-xterm-256color}"
@@ -319,6 +394,8 @@ check_cmd() {
     fi
   done
   echo "[MISS] $label"
+  MISSING_TOOLS+=("$label")
+  MISS_COUNT=$((MISS_COUNT + 1))
 }
 
 check_cmd git git
@@ -369,6 +446,21 @@ if [ -f /etc/profile.d/ai-agent-env.sh ]; then
   if command -v uv >/dev/null 2>&1; then uv --version >/dev/null && echo "[OK] uv --version"; fi
 else
   echo "[WARN] ai-agent-env.sh not found"
+fi
+
+log "结果汇总"
+if [[ "${#WARNINGS[@]}" -eq 0 ]]; then
+  echo "[OK] No warnings"
+else
+  for warning in "${WARNINGS[@]}"; do
+    echo "[WARN] $warning"
+  done
+fi
+if [[ "$MISS_COUNT" -eq 0 ]]; then
+  echo "[OK] No missing tools"
+else
+  echo "[WARN] Missing tools: ${MISS_COUNT}"
+  printf '[MISS] %s\n' "${MISSING_TOOLS[@]}"
 fi
 
 echo
