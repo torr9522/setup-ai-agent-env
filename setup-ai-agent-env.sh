@@ -148,18 +148,23 @@ EOF
 fi
 
 log "安装系统工具与官方 apt 工具"
-install_apt \
-  sudo curl wget aria2 ca-certificates gnupg \
-  git git-lfs gh build-essential make gcc g++ pkg-config \
-  python3 python3-pip python3-venv python-is-python3 \
-  nodejs \
-  docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
-  sqlite3 ripgrep fd-find tree plocate jq \
-  tmux screen mosh autossh \
-  htop iotop ncdu \
-  lsof rsync dnsutils net-tools nmap tcpdump iperf3 openssh-client \
-  zip unzip gzip bzip2 xz-utils zstd p7zip-full unrar-free tar file \
-  bat chromium
+apt_packages=(
+  sudo curl wget aria2 ca-certificates gnupg
+  git git-lfs gh build-essential make gcc g++ pkg-config
+  python3 python3-pip python3-venv python-is-python3
+  nodejs
+  docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  sqlite3 ripgrep fd-find tree plocate jq
+  tmux screen mosh autossh
+  htop iotop ncdu
+  lsof rsync dnsutils net-tools nmap tcpdump iperf3 openssh-client
+  zip unzip gzip bzip2 xz-utils zstd p7zip-full unrar-free tar file
+  bat
+)
+if [[ "$os_id" == "debian" ]]; then
+  apt_packages+=(chromium)
+fi
+install_apt "${apt_packages[@]}"
 
 git lfs install --system || true
 systemctl disable docker.service docker.socket containerd.service >/dev/null 2>&1 || true
@@ -209,6 +214,13 @@ log "安装最新版 Playwright 与浏览器依赖"
 npm install -g playwright@latest || true
 npx -y playwright install-deps chromium || true
 npx -y playwright install chromium || true
+if ! need_cmd chromium && ! need_cmd chromium-browser; then
+  playwright_chromium="$(find /root/.cache/ms-playwright -path '*/chrome-linux*/chrome' -type f 2>/dev/null | sort -V | tail -n 1 || true)"
+  if [[ -n "$playwright_chromium" ]]; then
+    ln -sf "$playwright_chromium" /usr/local/bin/chromium
+    ln -sf "$playwright_chromium" /usr/local/bin/chromium-browser
+  fi
+fi
 
 log "创建兼容软链接"
 ln -sf "$(command -v python3)" /usr/local/bin/python || true
