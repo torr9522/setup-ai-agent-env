@@ -32,6 +32,12 @@ install_apt() {
   apt-get install -y --no-install-recommends "$@"
 }
 
+repair_dpkg_state() {
+  log "检查 dpkg/apt 状态"
+  dpkg --configure -a
+  apt-get install -f -y
+}
+
 download() {
   local url="$1"
   local out="$2"
@@ -106,6 +112,8 @@ fi
 mkdir -p /etc/apt/keyrings /usr/local/bin /opt /root/bin /root/.local/bin /root/go/bin /root/.cargo/bin
 chmod 755 /etc/apt/keyrings
 export PATH="/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+repair_dpkg_state
 
 log "安装基础 apt 工具"
 apt-get update -y
